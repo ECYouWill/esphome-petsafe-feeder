@@ -9,17 +9,19 @@ substitutions:
   min_version: "2025.5.0"
   rgb_red_pin: "GPIO4"
   rgb_green_pin: "GPIO5"
-  rgb_blue_pin: "GPIO18"
+  rgb_blue_pin: "GPIO15"
   manual_feed_button_pin: "GPIO21"
   feed_forward_pin: "GPIO2"
   enable_sensors_pin: "GPIO32"
-  enable_feeder_motor_pin: "GPIO14"
+  enable_feeder_motor_pin: "GPIO26"
   feed_reverse_pin: "GPIO12"
   motor_sensor_pin: "GPIO13"
-  feed_sensor_pin: "GPIO27"
   tx_pin: "GPIO1"
   rx_pin: "GPIO3"
-
+  ir_beam_enable_pin: "GPIO18"
+  feed_sensor_1_pin: "GPIO19"
+  feed_sensor_2_pin: "GPIO14"
+  
 esphome:
   name: $name
   friendly_name: $friendly_name
@@ -113,20 +115,31 @@ script:
       send_event: bool
     then:
       lambda: |-
-        if (id(last_food_scoops_count) > 0 && id(last_food_sensor_count) / id(last_food_scoops_count) < id(low_food_threshold).state) {
-          if (send_event) {
-            id(dispatch_feeder_food_low_event)->execute("${friendly_name} food level is low. Check the hopper.");
-          }
-          id(feeder_state).publish_state("Food level is low");
-          ESP_LOGI("main", "Food level is low");
-        } else if (food_dispensed) {
-          id(feeder_state).publish_state("Food dispensed");
-          if (id(last_food_scoops_count) == 1) {
-            id(dispatch_feeder_food_dispensed_event)->execute("${friendly_name} dispensed 1 scoop of food.");
+          if (id(feed_sensor_2).state) {
+            if (send_event) {
+              id(dispatch_feeder_food_low_event)->execute("${friendly_name} Food level is critically low! Check the hopper.");
+            }
+            id(feeder_state).publish_state("Food level is critically low!");
+            ESP_LOGI("main", "Food level is critically low!");
+          } 
+          else if (id(feed_sensor_1).state) {
+            if (send_event) {
+              id(dispatch_feeder_food_low_event)->execute("${friendly_name} Food level is low. Check the hopper.");
+            }
+            id(feeder_state).publish_state("Food level is low");
+            ESP_LOGI("main", "Food level is low");
           } else {
-            id(dispatch_feeder_food_dispensed_event)->execute("${friendly_name} dispensed " + to_string(id(scoops_count)) + " scoops of food.");
+            id(feeder_state).publish_state("Food level correct.");
           }
-        }
+          
+          if (food_dispensed) {
+            id(feeder_state).publish_state("Food dispensed");
+            if (id(last_food_scoops_count) == 1) {
+              id(dispatch_feeder_food_dispensed_event)->execute("${friendly_name} dispensed 1 scoop of food.");
+            } else {
+              id(dispatch_feeder_food_dispensed_event)->execute("${friendly_name} dispensed " + to_string(id(scoops_count)) + " scoops of food.");
+            }
+          }
 
 light:
   - platform: rgb
@@ -199,7 +212,11 @@ interval:
           - light.turn_on:
               id: rgbled
               effect: fast_blink_red
-              
+  - interval: 10s
+    then:
+      - lambda: |-
+          id(check_food_level)->execute(/* food_dispensed = */ false, /* play_sound = */ false, /* send_event = */ true); 
+
 uart:
   tx_pin: $tx_pin
   rx_pin: $rx_pin
@@ -619,16 +636,19 @@ binary_sensor:
             level: INFO
             format: "%d/%d scoops served"
             args: [ id(scoops_count), id(max_scoops) ]
-
-  - id: feed_sensor
+  - id: feed_sensor_1
     internal: true
     platform: gpio
     pin: 
-      number: $feed_sensor_pin
-    on_press:
-      then:
-        - lambda: |-
-            id(food_sensor_count) += 1;
+      number: $feed_sensor_1_pin
+      inverted: true
+  - id: feed_sensor_2
+    internal: true
+    platform: gpio
+    pin: 
+      number: $feed_sensor_2_pin
+      inverted: true
+    
 
 text_sensor:
   - platform: template
@@ -652,6 +672,14 @@ switch:
       number: $enable_feeder_motor_pin
     restore_mode: ALWAYS_OFF
     disabled_by_default: true
+
+  - id: ir_beam_enable
+    internal: false
+    platform: gpio
+    pin: 
+      number: $ir_beam_enable_pin
+    restore_mode: ALWAYS_ON
+    disabled_by_default: false
 
   - id: feed_forward
     internal: true
